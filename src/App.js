@@ -149,6 +149,7 @@ export default function App() {
   const [combineMode, setCombineMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [exportData, setExportData] = useState(null); // {title, text}
+  const [lightbox, setLightbox] = useState(null); // full-size screenshot src
   const [copied, setCopied] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [newCat, setNewCat] = useState("");
@@ -480,7 +481,7 @@ export default function App() {
         ? setSelectedIds(p=>p.includes(t.id)?p.filter(x=>x!==t.id):[...p,t.id])
         : openTrade(t.id)}
       style={{ display:"grid",
-               gridTemplateColumns:"64px 90px 70px 60px 1fr 1fr 50px 110px minmax(80px,1.2fr)",
+               gridTemplateColumns:"64px 90px 78px 78px 70px 60px 1fr 1fr 50px 110px 24px minmax(80px,1.2fr)",
                alignItems:"center", gap:"8px", padding:"10px 14px",
                borderTop:"1px solid "+S.border, cursor:"pointer",
                background:isSel?"#10233d":"transparent",
@@ -493,7 +494,9 @@ export default function App() {
         background:t.pnl>=0?"#0c2e1c":"#3b0d0d", color:t.pnl>=0?S.green:S.red }}>
         {t.pnl>=0?"WIN":"LOSS"}
       </span>
-      <span style={{color:S.muted,fontSize:"12px"}}>{t.date.slice(5)}</span>
+      <span style={{color:S.blueLt,fontSize:"12px"}}>{t.date.slice(5)}</span>
+      <span style={{color:S.muted,fontSize:"12px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{timePart(t.entryTime)||"—"}</span>
+      <span style={{color:S.muted,fontSize:"12px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{timePart(t.time)||"—"}</span>
       <span style={{fontWeight:"600",fontSize:"13px"}}>{t.symbol}</span>
       <span style={{ fontSize:"10px", fontWeight:"700", textAlign:"center", padding:"3px 0", borderRadius:"5px",
         background:t.side==="long"?"#10233d":"#2d1230", color:t.side==="long"?S.blueLt:S.purple }}>
@@ -503,6 +506,12 @@ export default function App() {
       <span style={{color:S.muted,fontSize:"12px"}}>{t.exit||"—"}</span>
       <span style={{color:S.muted,fontSize:"12px"}}>{t.shares}</span>
       <span style={{fontWeight:"700",fontSize:"13px",color:t.pnl>=0?S.green:S.red}}>{fmt(t.pnl,pnlMode,t.symbol)}</span>
+      <span style={{display:"flex",alignItems:"center",justifyContent:"center"}}>
+        {t.screenshot&&(
+          <Image size={14} color={S.blueLt} style={{cursor:"pointer"}}
+            onClick={e=>{e.stopPropagation();setLightbox(t.screenshot);}}/>
+        )}
+      </span>
       <span style={{display:"flex",gap:"4px",flexWrap:"wrap",overflow:"hidden"}}>
         {(t.tags||[]).slice(0,2).map(tag=><TagPill key={tag} name={tag} small/>)}
         {(t.tags||[]).length>2&&<span style={{color:S.muted,fontSize:"10px"}}>+{t.tags.length-2}</span>}
@@ -594,13 +603,13 @@ export default function App() {
                 <span style={{color:S.muted,fontSize:"11px"}}>Click a row to journal it</span>
               </div>
               <div style={{overflowX:"auto"}}>
-                <div style={{minWidth:"760px"}}>
+                <div style={{minWidth:"960px"}}>
                   {/* Column headers */}
                   <div style={{ display:"grid",
-                       gridTemplateColumns:"64px 90px 70px 60px 1fr 1fr 50px 110px minmax(80px,1.2fr)",
+                       gridTemplateColumns:"64px 90px 78px 78px 70px 60px 1fr 1fr 50px 110px 24px minmax(80px,1.2fr)",
                        gap:"8px", padding:"9px 14px", background:S.panel2 }}>
-                    {["STATUS","DATE","SYMBOL","SIDE","ENTRY","EXIT","QTY","P&L","TAGS"].map(h=>(
-                      <span key={h} style={{color:S.muted,fontSize:"10px",fontWeight:"700",letterSpacing:"0.5px"}}>{h}</span>
+                    {["STATUS","DATE","ENTRY TIME","EXIT TIME","SYMBOL","SIDE","ENTRY","EXIT","QTY","P&L","","TAGS"].map((h,i)=>(
+                      <span key={h||"img"+i} style={{color:S.muted,fontSize:"10px",fontWeight:"700",letterSpacing:"0.5px"}}>{h}</span>
                     ))}
                   </div>
                   {chronological.length===0
@@ -766,7 +775,7 @@ export default function App() {
                 <input ref={ssRef2} type="file" accept="image/*" style={{display:"none"}}
                   onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>updateTrade(selTrade.id,{screenshot:ev.target.result});r.readAsDataURL(f);}}/>
                 {selTrade.screenshot&&(
-                  <img src={selTrade.screenshot} alt="chart" onClick={()=>window.open(selTrade.screenshot)}
+                  <img src={selTrade.screenshot} alt="chart" onClick={()=>setLightbox(selTrade.screenshot)}
                     style={{maxHeight:"180px",maxWidth:"100%",borderRadius:"8px",border:"1px solid "+S.border,cursor:"pointer"}}/>
                 )}
               </div>
@@ -835,7 +844,7 @@ export default function App() {
                 Trades ({dayData.n}) <span style={{color:S.muted,fontWeight:"400",fontSize:"11px",marginLeft:"6px"}}>Click a row to journal it</span>
               </div>
               <div style={{overflowX:"auto"}}>
-                <div style={{minWidth:"760px"}}>
+                <div style={{minWidth:"960px"}}>
                   {dayData.n===0
                     ? <p style={{color:S.muted,textAlign:"center",padding:"28px 0",fontSize:"13px"}}>No trades on this day</p>
                     : dayData.trades.map(t=><TradeRow key={t.id} t={t}/>)
@@ -993,6 +1002,20 @@ export default function App() {
       </div>
 
       {/* ═══ MODALS ═══ */}
+
+      {lightbox&&(
+        <div onClick={()=>setLightbox(null)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",display:"flex",
+                  alignItems:"center",justifyContent:"center",zIndex:60,padding:"24px",cursor:"zoom-out"}}>
+          <button onClick={()=>setLightbox(null)}
+            style={{position:"absolute",top:"16px",right:"16px",background:"rgba(255,255,255,0.1)",
+                    border:"none",borderRadius:"8px",padding:"8px",color:"#fff",cursor:"pointer",display:"flex"}}>
+            <X size={20}/>
+          </button>
+          <img src={lightbox} alt="chart full size" onClick={e=>e.stopPropagation()}
+            style={{maxWidth:"100%",maxHeight:"100%",borderRadius:"8px",boxShadow:"0 20px 60px rgba(0,0,0,0.6)",cursor:"default"}}/>
+        </div>
+      )}
 
       {exportData&&(
         <Modal title={exportData.title} onClose={()=>setExportData(null)} wide>
