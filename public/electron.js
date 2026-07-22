@@ -9,6 +9,7 @@ function createWindow() {
     width: 1280,
     height: 850,
     minWidth: 900,
+    title: 'Trading Journal',
     backgroundColor: '#0a0e1a',
     autoHideMenuBar: true,
     webPreferences: {
@@ -16,6 +17,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  win.setTitle('Trading Journal');
 
   if (isDev) {
     win.loadURL('http://localhost:3000');
