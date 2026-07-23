@@ -71,7 +71,8 @@
     "publish": {
       "provider": "github",
       "owner": "aqua07",
-      "repo": "trading-journal"
+      "repo": "trading-journal",
+      "releaseType": "release"
     }
   }
 }
