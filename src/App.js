@@ -668,7 +668,7 @@ export default function App() {
                           style={{background:S.panel2,borderRadius:"8px",minHeight:"62px",padding:"6px 4px",cursor:"pointer",
                                   border:dd?(dd.pnl>=0?"1px solid #14532d":"1px solid #7f1d1d"):"1px solid transparent",
                                   display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:"3px"}}>
-                          <span style={{fontSize:"14px",fontWeight:"600"}}>{day}</span>
+                          <span style={{fontSize:"14px",fontWeight:"600",color:S.blueLt}}>{day}</span>
                           {dd&&(
                             <span style={{fontSize:"11px",fontWeight:"700",color:dd.pnl>=0?S.green:S.red,
                               overflow:"hidden",textOverflow:"ellipsis",maxWidth:"100%",whiteSpace:"nowrap"}}>
