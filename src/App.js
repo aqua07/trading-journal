@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { PlusCircle, TrendingUp, TrendingDown, DollarSign, BarChart3, Upload, X,
-         Trash2, ChevronLeft, ChevronRight, ArrowLeft, Receipt, Tag, Image } from "lucide-react";
+         Trash2, ChevronLeft, ChevronRight, ArrowLeft, Receipt, Tag, Image, Users } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, BarChart, Bar } from "recharts";
 
 // ─── Storage (localStorage on desktop; window.storage fallback in Claude) ─────
@@ -133,6 +133,10 @@ export default function App() {
   const [trades, setTrades] = useState([]);
   const [tags, setTags] = useState([]);            // [{id,name}] user-created
   const [activeTags, setActiveTags] = useState([]); // toggled tag names on home
+  const [accountNames, setAccountNames] = useState({}); // {rawAccountId: "Friendly Label"}
+  const [selectedAccount, setSelectedAccount] = useState("all"); // "all" | accountId
+  const [acctCombineMode, setAcctCombineMode] = useState(false); // temporary multi-account aggregation
+  const [combinedAccounts, setCombinedAccounts] = useState([]); // accountIds selected while combining
   const [expenses, setExpenses] = useState([]);
   const [expCats, setExpCats] = useState([]);
   const [imports, setImports] = useState([]);
@@ -153,7 +157,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [newCat, setNewCat] = useState("");
-  const [newTrade, setNewTrade] = useState({ date:"", symbol:"MNQ", side:"long", entry:"", exit:"", shares:"", notes:"", screenshot:null, tags:[] });
+  const [newTrade, setNewTrade] = useState({ date:"", symbol:"MNQ", side:"long", entry:"", exit:"", shares:"", notes:"", screenshot:null, tags:[], account:"Unassigned" });
   const [newExpense, setNewExpense] = useState({ date:"", description:"", category:"", amount:"", amountMode:"ticks", notes:"" });
   const fileRef = useRef(); const ssRef = useRef(); const ssRef2 = useRef();
 
@@ -163,7 +167,7 @@ export default function App() {
       if (d) {
         setTrades(d.trades||[]); setTags(d.tags||[]); setExpenses(d.expenses||[]);
         setExpCats(d.expCats||[]); setImports(d.imports||[]); setDayNotes(d.dayNotes||{});
-        setPnlMode(d.pnlMode||"ticks");
+        setPnlMode(d.pnlMode||"ticks"); setAccountNames(d.accountNames||{});
       }
       setLoaded(true);
     })();
@@ -171,14 +175,45 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    persist({ trades, tags, expenses, expCats, imports, dayNotes, pnlMode });
-  }, [trades, tags, expenses, expCats, imports, dayNotes, pnlMode, loaded]);
+    persist({ trades, tags, expenses, expCats, imports, dayNotes, pnlMode, accountNames });
+  }, [trades, tags, expenses, expCats, imports, dayNotes, pnlMode, accountNames, loaded]);
 
   // ── Derived ──
+  const acctOf = (t) => t.account || "Unassigned";
+  const accountLabel = (id) => accountNames[id] || id;
+
+  const knownAccounts = useMemo(() => {
+    const ids = new Set(Object.keys(accountNames));
+    trades.forEach(t => ids.add(acctOf(t)));
+    return [...ids].sort((a,b) => (accountNames[a]||a).localeCompare(accountNames[b]||b));
+  }, [trades, accountNames]);
+
+  // null = no account restriction ("All Accounts" / combine mode with nothing picked yet)
+  const accountScope = useMemo(() => {
+    if (acctCombineMode) return combinedAccounts.length ? combinedAccounts : null;
+    if (selectedAccount === "all") return null;
+    return [selectedAccount];
+  }, [acctCombineMode, combinedAccounts, selectedAccount]);
+
+  const showAccountBreakdown = accountScope === null || (acctCombineMode && combinedAccounts.length >= 2);
+  const breakdownAccountIds = accountScope === null ? knownAccounts : combinedAccounts;
+
   const filteredTrades = useMemo(() => {
-    if (!activeTags.length) return trades;
-    return trades.filter(t => activeTags.every(tag => (t.tags||[]).includes(tag)));
-  }, [trades, activeTags]);
+    let r = trades;
+    if (activeTags.length) r = r.filter(t => activeTags.every(tag => (t.tags||[]).includes(tag)));
+    if (accountScope) r = r.filter(t => accountScope.includes(acctOf(t)));
+    return r;
+  }, [trades, activeTags, accountScope]);
+
+  const accountBreakdown = useMemo(() => {
+    if (!showAccountBreakdown) return [];
+    return breakdownAccountIds.map(id => {
+      const ts = filteredTrades.filter(t => acctOf(t) === id);
+      const w = ts.filter(t => t.pnl > 0).length;
+      const pnl = ts.reduce((s,t) => s + t.pnl, 0);
+      return { id, label: accountNames[id]||id, pnl, n: ts.length, wr: ts.length ? (w/ts.length*100).toFixed(1) : "0.0" };
+    }).filter(a => a.n > 0);
+  }, [showAccountBreakdown, breakdownAccountIds, filteredTrades, accountNames]);
 
   const chronological = useMemo(() =>
     [...filteredTrades].sort((a,b)=>(b.date+(b.time||"")).localeCompare(a.date+(a.time||""))),
@@ -242,6 +277,7 @@ export default function App() {
     const pi  = npi >= 0 ? npi : (gpi >= 0 ? gpi : find(["pnl","p&l","p/l","profit","realized","gain"]));
     const ei  = find(["entry","avg entry","open price","buy price"]);
     const x2i = find(["exit","avg exit","close price","sell price"]);
+    const ai  = find(["account"]);
 
     const num = (v) => parseFloat(String(v||"").replace(/[$,()]/g,"")) || 0;
     const g = (vals, idx) => idx>=0 && idx<vals.length ? vals[idx] : "";
@@ -260,15 +296,16 @@ export default function App() {
         const dt = g(v,di);
         const sideRaw = g(v,xi).toLowerCase();
         const qty = Math.abs(num(g(v,qi))) || 1;
-        fills.push({ symbol:sym.toUpperCase(), time:dt,
+        fills.push({ symbol:sym.toUpperCase(), time:dt, account:g(v,ai)||"Unassigned",
           signed: sideRaw.includes("sell")||sideRaw.includes("short") ? -qty : qty,
           price:num(g(v,pri)), pnl:num(g(v,pi)) });
       }
       fills.sort((a,b)=>new Date(a.time)-new Date(b.time));
-      const pos = {}; // symbol -> { qty, fills:[] }
+      const pos = {}; // "symbol|account" -> { qty, fills:[] }
       for (const f of fills) {
-        if (!pos[f.symbol]) pos[f.symbol] = { qty:0, fills:[] };
-        const p = pos[f.symbol];
+        const posKey = f.symbol+"|"+f.account;
+        if (!pos[posKey]) pos[posKey] = { qty:0, fills:[] };
+        const p = pos[posKey];
         p.fills.push(f);
         p.qty += f.signed;
         if (p.fills.length > 1 && p.qty === 0) {
@@ -280,7 +317,7 @@ export default function App() {
           const qty = Math.max(...p.fills.map(x=>Math.abs(x.signed)));
           result.push({ id:++maxId,
             date: sessionDate(exitFill.time), time: exitFill.time, entryTime: entryFill.time,
-            symbol: f.symbol, side,
+            symbol: f.symbol, side, account: f.account,
             entry: entryFill.price, exit: exitFill.price, shares: qty,
             pnl: parseFloat(netPnl.toFixed(2)), notes:"", screenshot:null, tags:[] });
           p.fills = [];
@@ -296,7 +333,8 @@ export default function App() {
         let pnl=num(g(v,pi));
         if(!pnl && en && ex) pnl = side==="long"?(ex-en)*sh:(en-ex)*sh;
         result.push({ id:++maxId, date:sessionDate(g(v,di)), time:g(v,di), symbol:sym.toUpperCase(),
-          side, entry:en, exit:ex, shares:sh, pnl:parseFloat(pnl.toFixed(2)), notes:"", screenshot:null, tags:[] });
+          side, entry:en, exit:ex, shares:sh, pnl:parseFloat(pnl.toFixed(2)), notes:"", screenshot:null, tags:[],
+          account:g(v,ai)||"Unassigned" });
       }
     }
     return result;
@@ -342,8 +380,9 @@ export default function App() {
       date:newTrade.date||selectedDay||new Date().toISOString().split("T")[0],
       symbol:newTrade.symbol.toUpperCase(), side:newTrade.side,
       entry:en, exit:ex, shares:sh, pnl:parseFloat(pnl.toFixed(2)),
-      notes:newTrade.notes, screenshot:newTrade.screenshot, tags:newTrade.tags },...p]);
-    setNewTrade({date:"",symbol:"MNQ",side:"long",entry:"",exit:"",shares:"",notes:"",screenshot:null,tags:[]});
+      notes:newTrade.notes, screenshot:newTrade.screenshot, tags:newTrade.tags,
+      account:newTrade.account||"Unassigned" },...p]);
+    setNewTrade({date:"",symbol:"MNQ",side:"long",entry:"",exit:"",shares:"",notes:"",screenshot:null,tags:[],account:"Unassigned"});
     setModal(null);
   };
 
@@ -388,6 +427,26 @@ export default function App() {
     return Object.keys(dayMap).filter(k=>k.startsWith(prefix)).reduce((s,k)=>s+dayMap[k].pnl,0);
   }, [dayMap, calMonth]);
 
+  const AccountBreakdownRow = () => (
+    (showAccountBreakdown && accountBreakdown.length>0) ? (
+      <div style={{marginBottom:"16px"}}>
+        <div style={{color:S.muted,fontSize:"11px",fontWeight:"700",letterSpacing:"0.5px",marginBottom:"6px"}}>
+          PER-ACCOUNT BREAKDOWN
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:"8px"}}>
+          {accountBreakdown.map(a=>(
+            <div key={a.id} style={{background:S.panel2,border:"1px solid "+S.border,borderRadius:"10px",padding:"10px 12px"}}>
+              <div style={{color:S.blueLt,fontSize:"12px",fontWeight:"600",marginBottom:"4px",
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={a.label}>{a.label}</div>
+              <div style={{color:a.pnl>=0?S.green:S.red,fontSize:"14px",fontWeight:"700"}}>{fmt(a.pnl,pnlMode)}</div>
+              <div style={{color:S.muted,fontSize:"10px",marginTop:"2px"}}>{a.n} trade{a.n!==1?"s":""} · {a.wr}% WR</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null
+  );
+
   const openDay = (ds) => { setSelectedDay(ds); setView("day"); };
   const openTrade = (id) => { setSelectedTradeId(id); setView("trade"); };
 
@@ -422,6 +481,7 @@ export default function App() {
       screenshot: sel.map(t=>t.screenshot).find(Boolean)||null,
       tags: [...new Set(sel.flatMap(t=>t.tags||[]))],
       importId: first.importId,
+      account: first.account || "Unassigned",
     };
     setTrades(p=>[merged,...p.filter(t=>!selectedIds.includes(t.id))]);
     setSelectedIds([]); setCombineMode(false);
@@ -481,7 +541,7 @@ export default function App() {
         ? setSelectedIds(p=>p.includes(t.id)?p.filter(x=>x!==t.id):[...p,t.id])
         : openTrade(t.id)}
       style={{ display:"grid",
-               gridTemplateColumns:"64px 90px 78px 78px 70px 60px 1fr 1fr 50px 110px 24px minmax(80px,1.2fr)",
+               gridTemplateColumns:"64px 90px 78px 78px 70px 60px 1fr 1fr 50px 110px 90px 24px minmax(80px,1.2fr)",
                alignItems:"center", gap:"8px", padding:"10px 14px",
                borderTop:"1px solid "+S.border, cursor:"pointer",
                background:isSel?"#10233d":"transparent",
@@ -506,6 +566,7 @@ export default function App() {
       <span style={{color:S.muted,fontSize:"12px"}}>{t.exit||"—"}</span>
       <span style={{color:S.muted,fontSize:"12px"}}>{t.shares}</span>
       <span style={{fontWeight:"700",fontSize:"13px",color:t.pnl>=0?S.green:S.red}}>{fmt(t.pnl,pnlMode,t.symbol)}</span>
+      <span style={{color:S.label,fontSize:"11px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} title={accountLabel(acctOf(t))}>{accountLabel(acctOf(t))}</span>
       <span style={{display:"flex",alignItems:"center",justifyContent:"center"}}>
         {t.screenshot&&(
           <Image size={14} color={S.blueLt} style={{cursor:"pointer"}}
@@ -537,10 +598,36 @@ export default function App() {
             </div>
             <Btn onClick={()=>setModal("tags")} ghost><Tag size={13}/>Tags</Btn>
             <Btn onClick={()=>setModal("expCats")} ghost><Receipt size={13}/>Categories</Btn>
+            <Btn onClick={()=>setModal("accounts")} ghost><Users size={13}/>Accounts</Btn>
             <Btn onClick={()=>setModal("import")} color={S.blue}><Upload size={13}/>Import CSV</Btn>
             <Btn onClick={()=>setModal("add")} color="#1e40af"><PlusCircle size={13}/>Add Trade</Btn>
             <Btn onClick={()=>setModal("addExpense")} ghost><Receipt size={13}/>Expense</Btn>
           </div>
+        </div>
+        <div style={{maxWidth:"1150px",margin:"8px auto 0",display:"flex",gap:"6px",flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{color:S.muted,fontSize:"11px",fontWeight:"700",letterSpacing:"0.5px"}}>ACCOUNT:</span>
+          {!acctCombineMode && (
+            <select value={selectedAccount} onChange={e=>setSelectedAccount(e.target.value)}
+              style={{...S.inp,width:"auto",padding:"5px 10px",fontSize:"12px"}}>
+              <option value="all">All Accounts</option>
+              {knownAccounts.map(id=><option key={id} value={id}>{accountLabel(id)}</option>)}
+            </select>
+          )}
+          <button onClick={()=>{ setAcctCombineMode(p=>!p); setCombinedAccounts([]); }}
+            style={{padding:"5px 10px",borderRadius:"8px",cursor:"pointer",fontSize:"12px",fontWeight:"600",
+                    border:"1px solid "+(acctCombineMode?S.blue:S.border),
+                    background:acctCombineMode?S.blue:"transparent",
+                    color:acctCombineMode?"#fff":S.label}}>
+            Combine
+          </button>
+          {acctCombineMode && knownAccounts.length===0 && (
+            <span style={{color:S.muted,fontSize:"12px"}}>No accounts detected yet.</span>
+          )}
+          {acctCombineMode && knownAccounts.map(id=>(
+            <TagPill key={id} name={accountLabel(id)} small
+              active={combinedAccounts.includes(id)}
+              onClick={()=>setCombinedAccounts(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id])}/>
+          ))}
         </div>
       </div>
 
@@ -594,6 +681,8 @@ export default function App() {
               ))}
             </div>
 
+            <AccountBreakdownRow/>
+
             {/* Recent trades — TraderSync style horizontal rows */}
             <div style={{background:S.panel,border:"1px solid "+S.border,borderRadius:"12px",overflow:"hidden",marginBottom:"18px"}}>
               <div style={{padding:"13px 16px",borderBottom:"1px solid "+S.border,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -603,12 +692,12 @@ export default function App() {
                 <span style={{color:S.muted,fontSize:"11px"}}>Click a row to journal it</span>
               </div>
               <div style={{overflowX:"auto"}}>
-                <div style={{minWidth:"960px"}}>
+                <div style={{minWidth:"1040px"}}>
                   {/* Column headers */}
                   <div style={{ display:"grid",
-                       gridTemplateColumns:"64px 90px 78px 78px 70px 60px 1fr 1fr 50px 110px 24px minmax(80px,1.2fr)",
+                       gridTemplateColumns:"64px 90px 78px 78px 70px 60px 1fr 1fr 50px 110px 90px 24px minmax(80px,1.2fr)",
                        gap:"8px", padding:"9px 14px", background:S.panel2 }}>
-                    {["STATUS","DATE","ENTRY TIME","EXIT TIME","SYMBOL","SIDE","ENTRY","EXIT","QTY","P&L","","TAGS"].map((h,i)=>(
+                    {["STATUS","DATE","ENTRY TIME","EXIT TIME","SYMBOL","SIDE","ENTRY","EXIT","QTY","P&L","ACCOUNT","","TAGS"].map((h,i)=>(
                       <span key={h||"img"+i} style={{color:S.muted,fontSize:"10px",fontWeight:"700",letterSpacing:"0.5px"}}>{h}</span>
                     ))}
                   </div>
@@ -844,7 +933,7 @@ export default function App() {
                 Trades ({dayData.n}) <span style={{color:S.muted,fontWeight:"400",fontSize:"11px",marginLeft:"6px"}}>Click a row to journal it</span>
               </div>
               <div style={{overflowX:"auto"}}>
-                <div style={{minWidth:"960px"}}>
+                <div style={{minWidth:"1040px"}}>
                   {dayData.n===0
                     ? <p style={{color:S.muted,textAlign:"center",padding:"28px 0",fontSize:"13px"}}>No trades on this day</p>
                     : dayData.trades.map(t=><TradeRow key={t.id} t={t}/>)
@@ -875,6 +964,9 @@ export default function App() {
                 </div>
               ))}
             </div>
+
+            <AccountBreakdownRow/>
+
             {activeTags.length>0&&(
               <div style={{background:"#10233d",border:"1px solid #1e40af",borderRadius:"8px",padding:"10px 14px",marginBottom:"14px",fontSize:"12px",color:S.blueLt}}>
                 Stats filtered by: {activeTags.join(", ")}
@@ -1062,6 +1154,34 @@ export default function App() {
         </Modal>
       )}
 
+      {modal==="accounts"&&(
+        <Modal title="Trading Accounts" onClose={()=>setModal(null)}>
+          <p style={{color:S.muted,fontSize:"12px",marginBottom:"14px"}}>
+            Give each account ID a friendly name — e.g. map FRTG25405327734 to "Tradeify 50k".
+            The label is used everywhere the account appears.
+          </p>
+          {knownAccounts.length===0
+            ? <p style={{color:S.muted,fontSize:"13px",textAlign:"center",padding:"16px 0"}}>
+                No accounts detected yet — import trades with an Account column, or add one manually.
+              </p>
+            : knownAccounts.map(id=>{
+                const count = trades.filter(t=>acctOf(t)===id).length;
+                return (
+                  <div key={id} style={{marginBottom:"12px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:"4px"}}>
+                      <span style={{color:S.label,fontSize:"11px",fontFamily:"monospace"}}>{id}</span>
+                      <span style={{color:S.muted,fontSize:"11px"}}>{count} trade{count!==1?"s":""}</span>
+                    </div>
+                    <input type="text" value={accountNames[id]||""}
+                      onChange={e=>setAccountNames(p=>({...p,[id]:e.target.value}))}
+                      placeholder="Friendly name (e.g., Tradeify 50k)" style={S.inp}/>
+                  </div>
+                );
+              })
+          }
+        </Modal>
+      )}
+
       {modal==="delete"&&deleteTarget&&(
         <Modal title="Confirm Delete" onClose={()=>setModal(null)}>
           <p style={{color:S.muted,fontSize:"13px",marginBottom:"6px"}}>
@@ -1130,11 +1250,21 @@ export default function App() {
             <Field label="Date"><input type="date" value={newTrade.date} onChange={e=>setNewTrade({...newTrade,date:e.target.value})} style={S.inp}/></Field>
             <Field label="Symbol *"><input type="text" value={newTrade.symbol} onChange={e=>setNewTrade({...newTrade,symbol:e.target.value})} placeholder="MNQ" style={S.inp}/></Field>
           </div>
-          <Field label="Side">
-            <select value={newTrade.side} onChange={e=>setNewTrade({...newTrade,side:e.target.value})} style={S.inp}>
-              <option value="long">Long</option><option value="short">Short</option>
-            </select>
-          </Field>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px"}}>
+            <Field label="Side">
+              <select value={newTrade.side} onChange={e=>setNewTrade({...newTrade,side:e.target.value})} style={S.inp}>
+                <option value="long">Long</option><option value="short">Short</option>
+              </select>
+            </Field>
+            <Field label="Account">
+              <select value={newTrade.account} onChange={e=>setNewTrade({...newTrade,account:e.target.value})} style={S.inp}>
+                <option value="Unassigned">Unassigned</option>
+                {knownAccounts.filter(id=>id!=="Unassigned").map(id=>(
+                  <option key={id} value={id}>{accountLabel(id)}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"10px"}}>
             <Field label="Entry *"><input type="number" step="0.25" value={newTrade.entry} onChange={e=>setNewTrade({...newTrade,entry:e.target.value})} style={S.inp}/></Field>
             <Field label="Exit *"><input type="number" step="0.25" value={newTrade.exit} onChange={e=>setNewTrade({...newTrade,exit:e.target.value})} style={S.inp}/></Field>
